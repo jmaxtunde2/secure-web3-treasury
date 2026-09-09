@@ -48,6 +48,17 @@ contract FalseReturningToken is ERC20{
     }
 }
 
+contract RevertToken is ERC20 {
+    constructor() ERC20("RevertToken","RT"){}
+    function mint(address to, uint amount) external {
+        _mint(to,amount);
+    }
+
+    function transfer(address, uint256) public pure override  returns (bool) {
+        revert();
+    }
+}
+
 contract SecureTreasuryTest is Test {
     SecureTreasury internal treasury;
     MockERC20 internal token;
@@ -57,6 +68,7 @@ contract SecureTreasuryTest is Test {
     address internal david;
     address internal recipient;
     FalseReturningToken internal falseToken;
+    RevertToken internal revertToken;
 
     function setUp() public{
         alice = makeAddr("alice");
@@ -76,7 +88,11 @@ contract SecureTreasuryTest is Test {
         token.mint(address(treasury), 100_000 ether);
 
         // False Token 
-        
+        falseToken = new FalseReturningToken();
+        falseToken.mint(address(treasury), 100_000 ether);
+        // Revert Token
+        revertToken = new RevertToken();
+        revertToken.mint(address(treasury), 100_000 ether);
     }
 
     function test_ConstructorConfiguration() public {
@@ -162,7 +178,80 @@ contract SecureTreasuryTest is Test {
 
         vm.stopPrank();
     }
-function test_CannotExecuteWithoutThreshold() public {
+
+    function test_FalseReturningToken() public {
+        uint256 amount = 1_000 ether;
+
+        uint256 recipientBalanceBefore =
+            falseToken.balanceOf(recipient);
+
+        bytes memory data = abi.encodeCall(
+            IERC20.transfer,
+            (recipient, amount)
+        );
+
+        uint256 proposalId =
+            treasury.createProposal(
+                address(falseToken),
+                0,
+                data
+            );
+
+        vm.prank(alice);
+        treasury.approve(proposalId);
+
+        vm.prank(bob);
+        treasury.approve(proposalId);
+
+        treasury.execute(proposalId);
+
+        uint256 recipientBalanceAfter =
+            falseToken.balanceOf(recipient);
+
+        assertEq(
+            recipientBalanceAfter,
+            recipientBalanceBefore
+        );
+    }
+
+    function test_RevertingToken() public {
+        uint256 amount = 1_000 ether;
+
+        uint256 recipientBalanceBefore =
+            revertToken.balanceOf(recipient);
+
+        bytes memory data = abi.encodeCall(
+            IERC20.transfer,
+            (recipient, amount)
+        );
+
+        uint256 proposalId =
+            treasury.createProposal(
+                address(revertToken),
+                0,
+                data
+            );
+
+        vm.prank(alice);
+        treasury.approve(proposalId);
+
+        vm.prank(bob);
+        treasury.approve(proposalId);
+
+        vm.expectRevert(SecureTreasury.ExecutionFailed.selector);
+
+        treasury.execute(proposalId);
+
+        uint256 recipientBalanceAfter =
+            revertToken.balanceOf(recipient);
+
+        assertEq(
+            recipientBalanceAfter,
+            recipientBalanceBefore
+        );
+    }
+
+    function test_CannotExecuteWithoutThreshold() public {
         uint256 proposalId =
             _createProposal();
 
@@ -208,7 +297,7 @@ function test_CannotExecuteWithoutThreshold() public {
 
         //assertTrue(executed);
     }
- function test_CannotExecuteTwice() public {
+    function test_CannotExecuteTwice() public {
         uint256 proposalId =
             _createProposal();
 
@@ -223,153 +312,304 @@ function test_CannotExecuteWithoutThreshold() public {
         treasury.execute(proposalId);
     }
 
-    // =============================================================
-    //                       REENTRANCY
-    // =============================================================
+        // =============================================================
+        //                       REENTRANCY
+        // =============================================================
 
-    function test_ReentrancyCannotExecuteTwice() public {
-        ReentrantReceiver attacker =
-            new ReentrantReceiver(treasury);
+        function test_ReentrancyCannotExecuteTwice() public {
+            ReentrantReceiver attacker =
+                new ReentrantReceiver(treasury);
 
-        uint256 proposalId =
-            treasury.createProposal(
-                address(attacker),
-                10 ether,
+            uint256 proposalId =
+                treasury.createProposal(
+                    address(attacker),
+                    10 ether,
+                    ""
+                );
+
+            vm.prank(alice);
+            treasury.approve(proposalId);
+
+            vm.prank(bob);
+            treasury.approve(proposalId);
+
+            attacker.setProposalId(
+                proposalId
+            );
+
+            uint256 treasuryBalanceBefore =
+                address(treasury).balance;
+
+            treasury.execute(proposalId);
+
+            assertEq(
+                address(treasury).balance,
+                treasuryBalanceBefore - 10 ether
+            );
+
+            assertTrue(
+                attacker.attackAttempted()
+            );
+        }
+
+        // =============================================================
+        //                  FAILED EXECUTION
+        // =============================================================
+
+        function test_FailedExecutionRevertsExecutedState()
+            public
+        {
+            address revertingTarget =
+                address(
+                    new AlwaysRevert()
+                );
+
+            uint256 proposalId =
+                treasury.createProposal(
+                    revertingTarget,
+                    10 ether,
+                    ""
+                );
+
+            _approveWithAliceAndBob(proposalId);
+
+            vm.expectRevert(
+                SecureTreasury.ExecutionFailed.selector
+            );
+
+            treasury.execute(proposalId);
+
+            // (
+            //     ,
+            //     ,
+            //     ,
+            //     ,
+            //     ,
+            //     bool executed
+            // ) = treasury.getProposal(proposalId);
+
+            // assertFalse(executed);
+        }
+
+        // =============================================================
+        //                         ERC20
+        // =============================================================
+
+        function test_CanExecuteERC20Transfer() public {
+            uint256 amount = 1_000 ether;
+
+            bytes memory data =
+                abi.encodeCall(
+                    IERC20.transfer,
+                    (recipient, amount)
+                );
+
+            uint256 proposalId =
+                treasury.createProposal(
+                    address(token),
+                    0,
+                    data
+                );
+
+            _approveWithAliceAndBob(proposalId);
+
+            uint256 recipientBalanceBefore =
+                token.balanceOf(recipient);
+
+            treasury.execute(proposalId);
+
+            assertEq(
+                token.balanceOf(recipient),
+                recipientBalanceBefore + amount
+            );
+
+            assertEq(
+                token.balanceOf(address(treasury)),
+                99_000 ether
+            );
+        }
+
+        // =============================================================
+        //                          HELPERS
+        // =============================================================
+
+        function _createProposal()
+            internal
+            returns (uint256 proposalId)
+        {
+            proposalId =
+                treasury.createProposal(
+                    recipient,
+                    10 ether,
+                    ""
+                );
+        }
+
+        function _approveWithAliceAndBob(
+                uint256 proposalId
+            ) internal {
+                vm.prank(alice);
+                treasury.approve(proposalId);
+
+                vm.prank(bob);
+                treasury.approve(proposalId);
+            }
+
+        function test_ProposalPreserveExactData() public {
+            address recipientw = address(0x1234);
+            uint256 proposalValue = 1 ether;
+
+            bytes memory proposalData = abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                recipientw,
+                100
+            );
+
+            uint256 proposalId = treasury.createProposal(
+                recipientw,
+                proposalValue,
+                proposalData
+            );
+
+            SecureTreasury.Proposal memory proposal = treasury.getProposal(proposalId);
+
+            assertEq(proposal.to, recipientw);
+            assertEq(proposal.value, proposalValue);
+            assertEq(proposal.approvalCount, 0);
+            assertEq(keccak256(proposal.data), keccak256(proposalData));
+            assertEq(proposal.nonce, proposalId);
+            assertFalse(proposal.executed);
+        }
+
+        function test_DifferentProposalsHaveIndependentTransactionData() public {
+            address recipientA = address(0x1111);
+            address recipientB = address(0x2222);
+
+            uint256 valueA = 1 ether;
+            uint256 valueB = 2 ether;
+
+            bytes memory dataA = abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                recipientA,
+                100
+            );
+
+            bytes memory dataB = abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                recipientB,
+                200
+            );
+
+            uint256 proposalA = treasury.createProposal(
+                recipientA,
+                valueA,
+                dataA
+            );
+
+            uint256 proposalB = treasury.createProposal(
+                recipientB,
+                valueB,
+                dataB
+            );
+
+            assertEq(proposalA, 0);
+            assertEq(proposalB, 1);
+            assertTrue(proposalA != proposalB);
+
+            SecureTreasury.Proposal memory getproposalA = treasury.getProposal(proposalA);
+
+            SecureTreasury.Proposal memory getproposalB = treasury.getProposal(proposalB);
+
+            assertEq(getproposalA.to, recipientA);
+            assertEq(getproposalA.value, valueA);
+            assertEq(keccak256(getproposalA.data), keccak256(dataA));
+            assertEq(getproposalA.nonce, proposalA);
+
+            assertEq(getproposalB.to, recipientB);
+            assertEq(getproposalB.value, valueB);
+            assertEq(keccak256(getproposalB.data), keccak256(dataB));
+            assertEq(getproposalB.nonce, proposalB);
+        }
+
+        function test_SameProposalIdExistsInDifferentTreasuries() public {
+            address[] memory treasurySigners = new address[](3);
+            treasurySigners[0] = alice;
+            treasurySigners[1] = bob;
+            treasurySigners[2] = charlie;
+
+            SecureTreasury treasuryA =
+                new SecureTreasury(treasurySigners, 2);
+
+            SecureTreasury treasuryB =
+                new SecureTreasury(treasurySigners, 2);
+
+            uint256 proposalA = treasuryA.createProposal(
+                address(0x1111),
+                1 ether,
                 ""
             );
 
-        vm.prank(alice);
-        treasury.approve(proposalId);
-
-        vm.prank(bob);
-        treasury.approve(proposalId);
-
-        attacker.setProposalId(
-            proposalId
-        );
-
-        uint256 treasuryBalanceBefore =
-            address(treasury).balance;
-
-        treasury.execute(proposalId);
-
-        assertEq(
-            address(treasury).balance,
-            treasuryBalanceBefore - 10 ether
-        );
-
-        assertTrue(
-            attacker.attackAttempted()
-        );
-    }
-
-    // =============================================================
-    //                  FAILED EXECUTION
-    // =============================================================
-
-    function test_FailedExecutionRevertsExecutedState()
-        public
-    {
-        address revertingTarget =
-            address(
-                new AlwaysRevert()
-            );
-
-        uint256 proposalId =
-            treasury.createProposal(
-                revertingTarget,
-                10 ether,
+            uint256 proposalB = treasuryB.createProposal(
+                address(0x2222),
+                5 ether,
                 ""
             );
 
-        _approveWithAliceAndBob(proposalId);
+            assertEq(proposalA, 0);
+            assertEq(proposalB, 0);
 
-        vm.expectRevert(
-            SecureTreasury.ExecutionFailed.selector
-        );
-
-        treasury.execute(proposalId);
-
-        // (
-        //     ,
-        //     ,
-        //     ,
-        //     ,
-        //     ,
-        //     bool executed
-        // ) = treasury.getProposal(proposalId);
-
-        // assertFalse(executed);
-    }
-
-    // =============================================================
-    //                         ERC20
-    // =============================================================
-
-    function test_CanExecuteERC20Transfer() public {
-        uint256 amount = 1_000 ether;
-
-        bytes memory data =
-            abi.encodeCall(
-                IERC20.transfer,
-                (recipient, amount)
+            assertTrue(
+                address(treasuryA) != address(treasuryB)
             );
+        }
 
-        uint256 proposalId =
-            treasury.createProposal(
-                address(token),
-                0,
-                data
-            );
+        function test_SameProposalIdCanRepresentDifferentTransactions() public {
+            address[] memory treasurySigners = new address[](3);
+            treasurySigners[0] = alice;
+            treasurySigners[1] = bob;
+            treasurySigners[2] = charlie;
 
-        _approveWithAliceAndBob(proposalId);
+            SecureTreasury treasuryA =
+                new SecureTreasury(treasurySigners, 2);
 
-        uint256 recipientBalanceBefore =
-            token.balanceOf(recipient);
+            SecureTreasury treasuryB =
+                new SecureTreasury(treasurySigners, 2);
 
-        treasury.execute(proposalId);
-
-        assertEq(
-            token.balanceOf(recipient),
-            recipientBalanceBefore + amount
-        );
-
-        assertEq(
-            token.balanceOf(address(treasury)),
-            99_000 ether
-        );
-    }
-
-    // =============================================================
-    //                          HELPERS
-    // =============================================================
-
-    function _createProposal()
-        internal
-        returns (uint256 proposalId)
-    {
-        proposalId =
-            treasury.createProposal(
-                recipient,
-                10 ether,
+            uint256 proposalA = treasuryA.createProposal(
+                address(0x1111),
+                1 ether,
                 ""
             );
+
+            uint256 proposalB = treasuryB.createProposal(
+                address(0x2222),
+                5 ether,
+                ""
+            );
+
+            assertEq(proposalA, proposalB);
+
+            SecureTreasury.Proposal memory storedA =
+                treasuryA.getProposal(proposalA);
+
+            SecureTreasury.Proposal memory storedB =
+                treasuryB.getProposal(proposalB);
+
+            assertEq(storedA.to, address(0x1111));
+            assertEq(storedA.value, 1 ether);
+
+            assertEq(storedB.to, address(0x2222));
+            assertEq(storedB.value, 5 ether);
+
+            assertTrue(storedA.to != storedB.to);
+            assertTrue(storedA.value != storedB.value);
+        }
+    
     }
 
-    function _approveWithAliceAndBob(
-        uint256 proposalId
-    ) internal {
-        vm.prank(alice);
-        treasury.approve(proposalId);
+    contract AlwaysRevert {
+        receive() external payable {
+            revert();
+        }
 
-        vm.prank(bob);
-        treasury.approve(proposalId);
     }
-}
-
-contract AlwaysRevert {
-    receive() external payable {
-        revert();
-    }
-
-}
