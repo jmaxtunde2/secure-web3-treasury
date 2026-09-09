@@ -3,8 +3,10 @@ pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-contract SecureTreasury{
+contract SecureTreasury is EIP712{
     using SafeERC20 for IERC20;
 
     // Storage
@@ -56,7 +58,8 @@ contract SecureTreasury{
     );
 
     // Constructor
-    constructor(address[] memory initialSigners, uint256 initialThreshold){
+    // chainId et verifyingContract are generated automatically
+    constructor(address[] memory initialSigners, uint256 initialThreshold)EIP712("SecureTreasury","1"){
         // Check 1
         if(initialSigners.length == 0 || initialThreshold == 0 || initialThreshold > initialSigners.length){
             revert InvalidThreshold();   
