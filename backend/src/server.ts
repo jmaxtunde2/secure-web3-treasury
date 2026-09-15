@@ -1,11 +1,15 @@
 import Fastify from "fastify";
 import { getTreasuryState,getProposal,createProposal } from "./blockchain/treasury.js";
 import { console } from "inspector/promises";
-import { authenticateApiKey, Role } from "./auth.js";
+import { authenticateApiKey, requireRole } from "./auth.js";
+import type {
+  FastifyReply,
+  FastifyRequest,
+} from "fastify";
 
 const app = Fastify({logger: true});
 
-const authenticate = async (request: any, reply: any) => {
+const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
   const apiKey = request.headers["x-api-key"];
 
   const user = authenticateApiKey(
@@ -72,7 +76,20 @@ app.get("/proposals/:id", async (request, reply) => {
     }
 });
 
-app.post("/proposals", async (request, reply) => {
+app.post("/proposals",
+  {
+    preHandler: [
+      authenticate,
+      async (request: any, reply: any) => {
+        if (!requireRole(request.user.role, ["admin", "operator"])) {
+          return reply.code(403).send({
+            error: "Forbidden",
+          });
+        }
+      },
+    ],
+  },
+  async (request, reply) => {
     const body = request.body as {
       to: `0x${string}`;
       value: string;

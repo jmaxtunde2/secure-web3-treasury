@@ -34,3 +34,10 @@ export function authenticateApiKey(
 
   return usersByApiKey.get(apiKey) ?? null;
 }
+
+export function requireRole(
+  role: Role,
+  allowedRoles: Role[],
+): boolean {
+  return allowedRoles.includes(role);
+}
