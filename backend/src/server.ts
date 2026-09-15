@@ -1,8 +1,25 @@
 import Fastify from "fastify";
-import { getTreasuryState,getProposal } from "./blockchain/treasury.js";
+import { getTreasuryState,getProposal,createProposal } from "./blockchain/treasury.js";
 import { console } from "inspector/promises";
+import { authenticateApiKey, Role } from "./auth.js";
 
 const app = Fastify({logger: true});
+
+const authenticate = async (request: any, reply: any) => {
+  const apiKey = request.headers["x-api-key"];
+
+  const user = authenticateApiKey(
+    typeof apiKey === "string" ? apiKey : undefined,
+  );
+
+  if (!user) {
+    return reply.code(401).send({
+      error: "Unauthorized",
+    });
+  }
+
+  request.user = user;
+};
 
 app.get("/", async () => {
     return {message: "Welcome to the Secure Web3 Treasury API"};
@@ -54,6 +71,63 @@ app.get("/proposals/:id", async (request, reply) => {
       });
     }
 });
+
+app.post("/proposals", async (request, reply) => {
+    const body = request.body as {
+      to: `0x${string}`;
+      value: string;
+      data: `0x${string}`;
+    }
+
+      if (
+        typeof body.to !== "string" ||
+        typeof body.value !== "string" ||
+        typeof body.data !== "string"
+      ) {
+        return reply.code(400).send({
+          error: "Invalid request body",
+        });
+      }
+
+      if (!/^0x[a-fA-F0-9]{40}$/.test(body.to)) {
+        return reply.code(400).send({
+          error: "Invalid recipient address",
+        });
+      }
+
+      if (!/^\d+$/.test(body.value)) {
+        return reply.code(400).send({
+          error: "Invalid value",
+        });
+      }
+
+      if (!/^0x([a-fA-F0-9]{2})*$/.test(body.data)) {
+        return reply.code(400).send({
+          error: "Invalid calldata",
+        });
+      }
+
+      try {
+        const result = await createProposal(
+          body.to as `0x${string}`,
+          BigInt(body.value),
+          body.data as `0x${string}`,
+        );
+
+        return {
+          proposalId: result.proposalId.toString(),
+          transactionHash: result.hash,
+        };
+      } catch (error) {
+        request.log.error(error);
+
+        return reply.code(500).send({
+          error: "Failed to create proposal",
+        });
+      }
+
+});
+
 
 const start = async () =>{
     try {

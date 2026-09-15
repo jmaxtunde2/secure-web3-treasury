@@ -1,5 +1,6 @@
-import { publicClient,walletClient,walletClient } from "./client.js";
+import { publicClient,walletClient } from "./client.js";
 import "dotenv/config";
+import { parseEventLogs } from "viem";
 
 const treasuryAddress = process.env.TREASURY_ADDRESS as `0x${string}`;
 
@@ -110,6 +111,37 @@ const treasuryAbi = [
       },
     ],
   },
+  {
+    type: "event",
+    name: "ProposalCreated",
+    inputs: [
+      {
+        name: "proposalId",
+        type: "uint256",
+        indexed: true,
+      },
+      {
+        name: "to",
+        type: "address",
+        indexed: true,
+      },
+      {
+        name: "value",
+        type: "uint256",
+        indexed: false,
+      },
+      {
+        name: "data",
+        type: "bytes",
+        indexed: false,
+      },
+      {
+        name: "nonce",
+        type: "uint256",
+        indexed: false,
+      },
+    ],
+  },
 ] as const;
 
 export async function getTreasuryState() {
@@ -165,7 +197,21 @@ export async function createProposal(to:`0x${string}`, value: bigint, data: `0x$
       args: [to, value, data],
     });
 
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, });
 
-    return {receipt, hash};
+    const events = parseEventLogs({
+      abi: treasuryAbi,
+      logs: receipt.logs,
+      eventName: "ProposalCreated",
+    });
+
+    if (events.length === 0) {
+      throw new Error("ProposalCreated event not found in transaction logs.");
+    }
+
+    const proposalId = events[0].args.proposalId;
+
+    //console.log("Decoded events:", events);
+    
+    return {receipt, hash,proposalId};
 }
