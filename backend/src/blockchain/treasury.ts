@@ -1,9 +1,14 @@
-import { publicClient } from "./client.js";
+import { publicClient,walletClient,walletClient } from "./client.js";
 import "dotenv/config";
 
 const treasuryAddress = process.env.TREASURY_ADDRESS as `0x${string}`;
 
 const treasuryAbi = [
+  {
+    type: "error",
+    name: "InvalidProposal",
+    inputs: [],
+  },
   {
     type: "function",
     name: "threshold",
@@ -36,6 +41,74 @@ const treasuryAbi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "getProposal",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "proposalId",
+        type: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          {
+            name: "to",
+            type: "address",
+          },
+          {
+            name: "value",
+            type: "uint256",
+          },
+          {
+            name: "approvalCount",
+            type: "uint256",
+          },
+          {
+            name: "data",
+            type: "bytes",
+          },
+          {
+            name: "nonce",
+            type: "uint256",
+          },
+          {
+            name: "executed",
+            type: "bool",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    type: "function",
+    name: "createProposal",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "to",
+        type: "address",
+      },
+      {
+        name: "value",
+        type: "uint256",
+      },
+      {
+        name: "data",
+        type: "bytes",
+      },
+    ],
+    outputs: [
+      {
+        name: "proposalId",
+        type: "uint256",
+      },
+    ],
   },
 ] as const;
 
@@ -73,4 +146,26 @@ export async function getTreasuryState() {
     signers,
     balance,
   };
+}
+
+export async function getProposal(proposalId: bigint) {
+  return publicClient.readContract({
+    address: treasuryAddress,
+    abi: treasuryAbi,
+    functionName: "getProposal",
+    args: [proposalId],
+  });
+}
+
+export async function createProposal(to:`0x${string}`, value: bigint, data: `0x${string}`) {
+    const hash = await walletClient.writeContract({
+      address: treasuryAddress,
+      abi: treasuryAbi,
+      functionName: "createProposal",
+      args: [to, value, data],
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+
+    return {receipt, hash};
 }
