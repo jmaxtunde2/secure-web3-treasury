@@ -1,13 +1,31 @@
 import Fastify from "fastify";
 import { getTreasuryState,getProposal,createProposal } from "./blockchain/treasury.js";
 import { console } from "inspector/promises";
-import { authenticateApiKey, requireRole } from "./auth.js";
+import { authenticateApiKey, requireRole, hasPermission } from "./auth.js";
 import type {
   FastifyReply,
+  FastifyError,
   FastifyRequest,
 } from "fastify";
 
+
 const app = Fastify({logger: true});
+
+app.setErrorHandler((error, request, reply) => {
+  const fastifyError = error as FastifyError;
+
+  if (fastifyError.validation) {
+    return reply.code(400).send({
+      error: "Invalid request",
+    });
+  }
+
+  request.log.error(error);
+
+  return reply.code(500).send({
+    error: "Internal server error",
+  });
+});
 
 const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
   const apiKey = request.headers["x-api-key"];
@@ -23,6 +41,12 @@ const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
   }
 
   request.user = user;
+};
+
+type CreateProposalBody = {
+  to: string;
+  value: string;
+  data: string;
 };
 
 app.get("/", async () => {
@@ -76,12 +100,37 @@ app.get("/proposals/:id", async (request, reply) => {
     }
 });
 
-app.post("/proposals",
+app.post(
+  "/proposals",
   {
+    schema: {
+      body: {
+        type: "object",
+        additionalProperties: false,
+        required: ["to", "value", "data"],
+        properties: {
+          to: {
+            type: "string",
+            pattern: "^0x[a-fA-F0-9]{40}$",
+          },
+          value: {
+            type: "string",
+            pattern: "^[0-9]+$",
+          },
+          data: {
+            type: "string",
+            pattern: "^0x([a-fA-F0-9]{2})*$",
+          },
+        },
+      },
+    },
     preHandler: [
       authenticate,
-      async (request: any, reply: any) => {
-        if (!requireRole(request.user.role, ["admin", "operator"])) {
+      async (
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => {
+        if (!hasPermission(request.user.role, "proposal:create")) {
           return reply.code(403).send({
             error: "Forbidden",
           });
@@ -90,11 +139,7 @@ app.post("/proposals",
     ],
   },
   async (request, reply) => {
-    const body = request.body as {
-      to: `0x${string}`;
-      value: string;
-      data: `0x${string}`;
-    }
+    const body = request.body as CreateProposalBody;
 
       if (
         typeof body.to !== "string" ||
@@ -106,24 +151,7 @@ app.post("/proposals",
         });
       }
 
-      if (!/^0x[a-fA-F0-9]{40}$/.test(body.to)) {
-        return reply.code(400).send({
-          error: "Invalid recipient address",
-        });
-      }
-
-      if (!/^\d+$/.test(body.value)) {
-        return reply.code(400).send({
-          error: "Invalid value",
-        });
-      }
-
-      if (!/^0x([a-fA-F0-9]{2})*$/.test(body.data)) {
-        return reply.code(400).send({
-          error: "Invalid calldata",
-        });
-      }
-
+      
       try {
         const result = await createProposal(
           body.to as `0x${string}`,
@@ -144,6 +172,66 @@ app.post("/proposals",
       }
 
 });
+
+app.post(
+  "/proposals/:id/approve",
+  {
+    schema: {
+      params: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id"],
+        properties: {
+          id: {
+            type: "string",
+            pattern: "^[0-9]+$",
+          },
+        },
+      },
+    },
+    preHandler: [
+      authenticate,
+      async (
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => {
+        if (
+          !hasPermission(
+            request.user.role,
+            "proposal:approve",
+          )
+        ) {
+          return reply.code(403).send({
+            error: "Forbidden",
+          });
+        }
+      },
+    ],
+  },
+  async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const proposalId = BigInt(id);
+
+    try {
+      // Confirm that the proposal exists before sending a transaction.
+      await getProposal(proposalId);
+
+      const result = await approveProposal(proposalId);
+
+      return {
+        proposalId: id,
+        transactionHash: result.hash,
+      };
+    } catch (error) {
+      request.log.error(error);
+
+      return reply.code(500).send({
+        error: "Failed to approve proposal",
+      });
+    }
+  },
+);
 
 
 const start = async () =>{

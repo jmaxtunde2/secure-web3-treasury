@@ -24,6 +24,8 @@ contract SecureTreasury is EIP712{
     uint256 public immutable threshold;
     uint256 public proposalCount;
 
+    bytes32 private constant TRANSACTION_TYPEHASH = keccak256("Transaction(address to,uint256 value,bytes data,uint256 nonce)");
+
     mapping (uint256 => Proposal) proposals;
     mapping (uint256 => mapping (address => bool)) public approved;
 
@@ -143,30 +145,49 @@ contract SecureTreasury is EIP712{
         );
     }
 
-    function execute(uint256 proposalId) external {
-        // Check
-        if(proposalId >= proposalCount){
+    function execute(
+        uint256 proposalId,
+        bytes[] calldata signatures
+    ) external {
+        if (proposalId >= proposalCount) {
             revert InvalidProposal();
         }
 
         Proposal storage proposal = proposals[proposalId];
-        if(proposal.executed){
+
+        if (proposal.executed) {
             revert AlreadyExecuted();
         }
 
-        if (proposal.approvalCount < threshold) {
+        bytes32 digest = getTransactionDigest(
+            proposal.to,
+            proposal.value,
+            proposal.data,
+            proposal.nonce
+        );
+
+        uint256 validSignerCount =
+            _validateSignatures(
+                digest,
+                signatures
+            );
+
+        if (validSignerCount < threshold) {
             revert InsufficientApprovals();
         }
 
-        // Effect
+        // Effects before interaction
         proposal.executed = true;
-        // Interaction
-        (bool success,) = proposal.to.call{value:proposal.value}(proposal.data);
-        if(!success){
+
+        // External interaction
+        (bool success,) = proposal.to.call{
+            value: proposal.value
+        }(proposal.data);
+
+        if (!success) {
             revert ExecutionFailed();
         }
-        
-        // Event
+
         emit ProposalExecuted(proposalId);
     }
 
@@ -189,5 +210,125 @@ contract SecureTreasury is EIP712{
     function treasuryBalance() external view returns (uint256) {
         return address(this).balance;
     }
-    
+
+    function hashTransaction(
+        address to,
+        uint256 value,
+        bytes memory data,
+        uint256 nonce
+    ) public pure returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                TRANSACTION_TYPEHASH,
+                to,
+                value,
+                keccak256(data),
+                nonce
+            )
+        );
+    }
+
+    function getTransactionDigest(
+        address to,
+        uint256 value,
+        bytes memory data,
+        uint256 nonce
+    ) public view returns (bytes32) {
+        bytes32 structHash = hashTransaction(
+            to,
+            value,
+            data,
+            nonce
+        );
+
+        return _hashTypedDataV4(structHash);
+    }
+
+    function recoverSigner(
+        bytes32 digest,
+        bytes calldata signature
+    ) public pure returns (address) {
+        return ECDSA.recover(digest, signature);
+    }
+
+    function isValidSignature(bytes32 digest, bytes calldata signature) public view returns (bool) {
+        address signer = ECDSA.recover(digest,signature);
+
+        return isSigner[signer];
+    }
+
+   
+    function countValidSigners(
+        bytes32 digest,
+        bytes[] calldata signatures
+    ) public view returns (uint256 count) {
+        address[] memory recoveredSigners =
+            new address[](signatures.length);
+
+        for (uint256 i = 0; i < signatures.length; i++) {
+            address signer = ECDSA.recover(
+                digest,
+                signatures[i]
+            );
+
+            // Ignore unauthorized signers
+            if (!isSigner[signer]) {
+                continue;
+            }
+
+            bool alreadyCounted = false;
+
+            // Check whether this signer was already counted
+            for (uint256 j = 0; j < i; j++) {
+                if (recoveredSigners[j] == signer) {
+                    alreadyCounted = true;
+                    break;
+                }
+            }
+
+            if (alreadyCounted) {
+                continue;
+            }
+
+            recoveredSigners[i] = signer;
+            count++;
+        }
+    }
+
+    function _validateSignatures(
+        bytes32 digest,
+        bytes[] calldata signatures
+    ) internal view returns (uint256 count) {
+        address[] memory recoveredSigners =
+            new address[](signatures.length);
+
+        for (uint256 i = 0; i < signatures.length; i++) {
+            address signer = ECDSA.recover(
+                digest,
+                signatures[i]
+            );
+
+            // The recovered address must be a registered signer.
+            if (!isSigner[signer]) {
+                continue;
+            }
+
+            bool alreadyCounted = false;
+
+            // Prevent the same signer from being counted twice.
+            for (uint256 j = 0; j < i; j++) {
+                if (recoveredSigners[j] == signer) {
+                    alreadyCounted = true;
+                    break;
+                }
+            }
+
+            if (alreadyCounted) {
+                continue;
+            }
+
+            recoveredSigners[i] = signer;
+            count++;
+        }
+    }    
 }

@@ -30,12 +30,19 @@ contract ReentrantReceiver {
         proposalId = proposalId_;
     }
 
-    receive() external payable{
-        if(!attackAttempted){
+    receive() external payable {
+        if (!attackAttempted) {
             attackAttempted = true;
-            try treasury.execute(proposalId) {
+
+            bytes[] memory signatures =
+                new bytes[](0);
+
+            try treasury.execute(
+                proposalId,
+                signatures
+            ) {
                 revert("REENTRANCY SUCCEEDED");
-            } catch  {}
+            } catch {}
         }
     }
 }
@@ -68,14 +75,19 @@ contract SecureTreasuryTest is Test {
     address internal bob;
     address internal charlie;
     address internal david;
+
+    uint256 internal alicePrivateKey = 0xA11CE;
+    uint256 internal bobPrivateKey = 0xB0B;
+    uint256 internal charliePrivateKey = 0xC0C;
     address internal recipient;
     FalseReturningToken internal falseToken;
     RevertToken internal revertToken;
 
     function setUp() public{
-        alice = makeAddr("alice");
-        bob = makeAddr("bob");
-        charlie = makeAddr("charlie");
+        // Use deterministic private-key-based addresses for signers
+        alice = vm.addr(alicePrivateKey);
+        bob = vm.addr(bobPrivateKey);
+        charlie = vm.addr(charliePrivateKey);
         david = makeAddr("david");
         recipient = makeAddr("recipient");
         
@@ -95,6 +107,7 @@ contract SecureTreasuryTest is Test {
         // Revert Token
         revertToken = new RevertToken();
         revertToken.mint(address(treasury), 100_000 ether);
+
     }
 
     function test_ConstructorConfiguration() public {
@@ -199,13 +212,17 @@ contract SecureTreasuryTest is Test {
                 data
             );
 
-        vm.prank(alice);
-        treasury.approve(proposalId);
+        bytes[] memory signatures =
+            _getSignatures(
+                proposalId,
+                alicePrivateKey,
+                bobPrivateKey
+            );
 
-        vm.prank(bob);
-        treasury.approve(proposalId);
-
-        treasury.execute(proposalId);
+        treasury.execute(
+            proposalId,
+            signatures
+        );
 
         uint256 recipientBalanceAfter =
             falseToken.balanceOf(recipient);
@@ -215,7 +232,6 @@ contract SecureTreasuryTest is Test {
             recipientBalanceBefore
         );
     }
-
     function test_RevertingToken() public {
         uint256 amount = 1_000 ether;
 
@@ -234,15 +250,21 @@ contract SecureTreasuryTest is Test {
                 data
             );
 
-        vm.prank(alice);
-        treasury.approve(proposalId);
+        bytes[] memory signatures =
+            _getSignatures(
+                proposalId,
+                alicePrivateKey,
+                bobPrivateKey
+            );
 
-        vm.prank(bob);
-        treasury.approve(proposalId);
+        vm.expectRevert(
+            SecureTreasury.ExecutionFailed.selector
+        );
 
-        vm.expectRevert(SecureTreasury.ExecutionFailed.selector);
-
-        treasury.execute(proposalId);
+        treasury.execute(
+            proposalId,
+            signatures
+        );
 
         uint256 recipientBalanceAfter =
             revertToken.balanceOf(recipient);
@@ -254,64 +276,91 @@ contract SecureTreasuryTest is Test {
     }
 
     function test_CannotExecuteWithoutThreshold() public {
-        uint256 proposalId =
-            _createProposal();
+    uint256 proposalId =
+        _createProposal();
 
-        vm.prank(alice);
+    SecureTreasury.Proposal memory proposal =
+        treasury.getProposal(proposalId);
 
-        treasury.approve(proposalId);
+    bytes32 digest =
+        treasury.getTransactionDigest(
+            proposal.to,
+            proposal.value,
+            proposal.data,
+                proposal.nonce
+            );
+
+        (uint8 v, bytes32 r, bytes32 s) =
+            vm.sign(
+                alicePrivateKey,
+                digest
+            );
+
+        bytes[] memory signatures =
+            new bytes[](1);
+
+        signatures[0] =
+            abi.encodePacked(r, s, v);
 
         vm.expectRevert(
             SecureTreasury.InsufficientApprovals.selector
         );
 
-        treasury.execute(proposalId);
+        treasury.execute(
+            proposalId,
+            signatures
+        );
     }
 
     function test_CanExecuteAfterThreshold() public {
         uint256 proposalId =
             _createProposal();
 
-        vm.prank(alice);
-        treasury.approve(proposalId);
-
-        vm.prank(bob);
-        treasury.approve(proposalId);
+        bytes[] memory signatures =
+            _getSignatures(
+                proposalId,
+                alicePrivateKey,
+                bobPrivateKey
+            );
 
         uint256 recipientBalanceBefore =
             recipient.balance;
 
-        treasury.execute(proposalId);
+        treasury.execute(
+            proposalId,
+            signatures
+        );
 
         assertEq(
             recipient.balance,
             recipientBalanceBefore + 10 ether
         );
-
-        // (
-        //     ,
-        //     ,
-        //     ,
-        //     ,
-        //     ,
-        //     bool executed
-        // ) = treasury.getProposal(proposalId);
-
-        //assertTrue(executed);
     }
+    
     function test_CannotExecuteTwice() public {
         uint256 proposalId =
             _createProposal();
 
-        _approveWithAliceAndBob(proposalId);
+        bytes[] memory signatures =
+            _getSignatures(
+                proposalId,
+                alicePrivateKey,
+                bobPrivateKey
+            );
 
-        treasury.execute(proposalId);
+        treasury.execute(
+            proposalId,
+            signatures
+        );
 
         vm.expectRevert(
             SecureTreasury.AlreadyExecuted.selector
         );
 
-        treasury.execute(proposalId);
+        treasury.execute(
+            proposalId,
+            signatures
+        );
     }
 
         // =============================================================
@@ -342,7 +391,13 @@ contract SecureTreasuryTest is Test {
             uint256 treasuryBalanceBefore =
                 address(treasury).balance;
 
-            treasury.execute(proposalId);
+            bytes[] memory signatures = _getSignatures(
+                proposalId,
+                alicePrivateKey,
+                bobPrivateKey
+            );
+
+            treasury.execute(proposalId, signatures);
 
             assertEq(
                 address(treasury).balance,
@@ -358,7 +413,7 @@ contract SecureTreasuryTest is Test {
         //                  FAILED EXECUTION
         // =============================================================
 
-        function test_FailedExecutionRevertsExecutedState()
+       function test_FailedExecutionRevertsExecutedState()
             public
         {
             address revertingTarget =
@@ -373,63 +428,72 @@ contract SecureTreasuryTest is Test {
                     ""
                 );
 
-            _approveWithAliceAndBob(proposalId);
+            bytes[] memory signatures =
+                _getSignatures(
+                    proposalId,
+                    alicePrivateKey,
+                    bobPrivateKey
+                );
 
             vm.expectRevert(
                 SecureTreasury.ExecutionFailed.selector
             );
 
-            treasury.execute(proposalId);
+            treasury.execute(
+                proposalId,
+                signatures
+            );
 
-            // (
-            //     ,
-            //     ,
-            //     ,
-            //     ,
-            //     ,
-            //     bool executed
-            // ) = treasury.getProposal(proposalId);
+            SecureTreasury.Proposal memory proposal =
+                treasury.getProposal(proposalId);
 
-            // assertFalse(executed);
+            assertFalse(proposal.executed);
         }
-
         // =============================================================
         //                         ERC20
         // =============================================================
 
         function test_CanExecuteERC20Transfer() public {
-            uint256 amount = 1_000 ether;
+    uint256 amount = 1_000 ether;
 
-            bytes memory data =
-                abi.encodeCall(
-                    IERC20.transfer,
-                    (recipient, amount)
-                );
+    bytes memory data =
+        abi.encodeCall(
+            IERC20.transfer,
+            (recipient, amount)
+        );
 
-            uint256 proposalId =
-                treasury.createProposal(
-                    address(token),
-                    0,
-                    data
-                );
+    uint256 proposalId =
+        treasury.createProposal(
+            address(token),
+            0,
+            data
+        );
 
-            _approveWithAliceAndBob(proposalId);
+    bytes[] memory signatures =
+        _getSignatures(
+            proposalId,
+            alicePrivateKey,
+            bobPrivateKey
+        );
 
-            uint256 recipientBalanceBefore =
-                token.balanceOf(recipient);
+    uint256 recipientBalanceBefore =
+        token.balanceOf(recipient);
 
-            treasury.execute(proposalId);
+    treasury.execute(
+        proposalId,
+        signatures
+    );
 
-            assertEq(
-                token.balanceOf(recipient),
-                recipientBalanceBefore + amount
-            );
+    assertEq(
+        token.balanceOf(recipient),
+        recipientBalanceBefore + amount
+    );
 
-            assertEq(
-                token.balanceOf(address(treasury)),
-                99_000 ether
-            );
-        }
+    assertEq(
+        token.balanceOf(address(treasury)),
+        99_000 ether
+    );
+}
 
         // =============================================================
         //                          HELPERS
@@ -606,8 +670,720 @@ contract SecureTreasuryTest is Test {
             assertTrue(storedA.to != storedB.to);
             assertTrue(storedA.value != storedB.value);
         }
-    
-    }
+
+        function test_TransactionHashChangeWhenValueChanges() public {
+            bytes memory data = abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                address(0x1234),
+                100
+            );
+
+            bytes32 hashA = treasury.hashTransaction(
+                address(0x1234),
+                1 ether,
+                data,
+                1
+            );
+
+            bytes32 hashB = treasury.hashTransaction(
+                 address(0x1234),
+                2 ether,
+                data,
+                1
+            );
+
+            assertTrue(hashA != hashB);
+        }
+
+        function test_TransactionHashChangeWhenDataChanges() public {
+            bytes memory dataA = abi.encodeWithSignature(
+                "transaction(address,uint256)",
+                address(0x1234),
+                100
+            );
+
+            bytes memory dataB = abi.encodeWithSignature(
+                "transaction(address,uint256)",
+                address(0x5678),
+                100
+            );
+
+            bytes32 hashA = treasury.hashTransaction(
+                address(0x9999),
+                5 ether,
+                dataA,
+                2
+            );
+
+            bytes32 hashB = treasury.hashTransaction(
+                address(0x9999),
+                5 ether,
+                dataB,
+                2
+            );
+
+            assertTrue(hashA != hashB);
+        }
+
+        function test_HashTransactionChangesWhenNonceChanges() public {
+            bytes memory data = abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                address(0x1234),
+                100
+            );
+
+            bytes32 hashA = treasury.hashTransaction(
+                address(0x1234),
+                1 ether,
+                data,
+                0
+            );
+
+            bytes32 hashB = treasury.hashTransaction(
+                address(0x1234),
+                1 ether,
+                data,
+                1
+            );
+
+            assertTrue(hashA != hashB);
+        }
+
+        function test_DigestDiffersAcrossTreasuries() public {
+            address[] memory treasurySigners = new address[](3);
+            treasurySigners[0] = alice;
+            treasurySigners[1] = bob;
+            treasurySigners[2] = charlie;
+
+            SecureTreasury treasuryA =
+                new SecureTreasury(treasurySigners, 2);
+
+            SecureTreasury treasuryB =
+                new SecureTreasury(treasurySigners, 2);
+
+            address recipientX = address(0x1234);
+
+            bytes memory data = abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                recipientX,
+                100
+            );
+
+            bytes32 digestA = treasuryA.getTransactionDigest(
+                recipientX,
+                1 ether,
+                data,
+                0
+            );
+
+            bytes32 digestB = treasuryB.getTransactionDigest(
+                recipientX,
+                1 ether,
+                data,
+                0
+            );
+
+            assertTrue(digestA != digestB);
+        }
+
+        function test_DigestChangesWithChainId() public {
+            address recipientY = address(0x1234);
+
+            bytes memory data = abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                recipientY,
+                100
+            );
+
+            bytes32 digestBefore = treasury.getTransactionDigest(
+                recipientY,
+                1 ether,
+                data,
+                0
+            );
+
+            vm.chainId(1);
+
+            bytes32 digestAfter = treasury.getTransactionDigest(
+                recipient,
+                1 ether,
+                data,
+                0
+            );
+
+            assertTrue(digestBefore != digestAfter);
+        }
+
+        function test_RecoverSigner() public {
+            uint256 privateKey = 0xA11CE;
+            address expectedSigner = vm.addr(privateKey);
+
+            bytes32 digest = treasury.getTransactionDigest(
+                address(0x1234),
+                1 ether,
+                "",
+                0
+            );
+
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+                privateKey,
+                digest
+            );
+
+            bytes memory signature = abi.encodePacked(
+                r,
+                s,
+                v
+            );
+
+            address recoveredSigner = treasury.recoverSigner(
+                digest,
+                signature
+            );
+
+            assertEq(recoveredSigner, expectedSigner);
+        }
+
+        function test_SignatureDoesNotMatchModifiedTransaction() public {
+            uint256 privateKey = 0xA11CE;
+
+            bytes memory data = abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                address(0x1234),
+                100
+            );
+
+            bytes32 signedDigest = treasury.getTransactionDigest(
+                address(0x1234),
+                1 ether,
+                data,
+                0
+            );
+
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+                privateKey,
+                signedDigest
+            );
+
+            bytes memory signature = abi.encodePacked(
+                r,
+                s,
+                v
+            );
+
+            bytes32 modifiedDigest = treasury.getTransactionDigest(
+                address(0x1234),
+                10 ether,
+                data,
+                0
+            );
+
+            address recoveredSigner = treasury.recoverSigner(
+                modifiedDigest,
+                signature
+            );
+
+            address expectedSigner = vm.addr(privateKey);
+
+            assertTrue(recoveredSigner != expectedSigner);
+        }
+
+        function test_ValidSignatureFromRegisteredSigner() public {
+            uint256 privateKey = 0xA11CE;
+            address signer = vm.addr(privateKey);
+
+            address[] memory signerList = new address[](1);
+            signerList[0] = signer;
+
+            SecureTreasury localTreasury =
+                new SecureTreasury(signerList, 1);
+
+            bytes32 digest = localTreasury.getTransactionDigest(
+                address(0x1234),
+                1 ether,
+                "",
+                0
+            );
+
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+                privateKey,
+                digest
+            );
+
+            bytes memory signature = abi.encodePacked(r, s, v);
+
+            assertTrue(
+                localTreasury.isValidSignature(
+                    digest,
+                    signature
+                )
+            );
+        }
+
+        function test_InvalidSignatureFromNonSigner() public {
+            uint256 malloryPrivateKey = 0xDAD;
+
+            address[] memory signerList = new address[](1);
+            signerList[0] = alice;
+
+            SecureTreasury localTreasury =
+                new SecureTreasury(signerList, 1);
+
+            bytes32 digest = localTreasury.getTransactionDigest(
+                address(0x1234),
+                1 ether,
+                "",
+                0
+            );
+
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+                malloryPrivateKey,
+                digest
+            );
+
+            bytes memory signature = abi.encodePacked(r, s, v);
+
+            assertFalse(
+                localTreasury.isValidSignature(
+                    digest,
+                    signature
+                )
+            );
+        }
+
+        function test_DuplicateSignerIsCountedOnlyOnce() public {
+            address[] memory signerList = new address[](2);
+            signerList[0] = alice;
+            signerList[1] = bob;
+
+            SecureTreasury localTreasury =
+                new SecureTreasury(signerList, 2);
+
+            // Fund the local treasury so it can send ETH in the proposal
+            vm.deal(address(localTreasury), 1 ether);
+
+            // Fund the local treasury so it can send ETH in the proposal
+            vm.deal(address(localTreasury), 1 ether);
+
+            // Fund the local treasury so it can send ETH in the proposal
+            vm.deal(address(localTreasury), 1 ether);
+
+            // Fund the local treasury so it can send ETH in the proposal
+            vm.deal(address(localTreasury), 1 ether);
+
+            bytes32 digest = localTreasury.getTransactionDigest(
+                address(0x1234),
+                1 ether,
+                "",
+                0
+            );
+
+            (uint8 vA, bytes32 rA, bytes32 sA) =
+                vm.sign(alicePrivateKey, digest);
+
+            (uint8 vB, bytes32 rB, bytes32 sB) =
+                vm.sign(bobPrivateKey, digest);
+
+            bytes[] memory signatures = new bytes[](3);
+
+            signatures[0] = abi.encodePacked(rA, sA, vA);
+            signatures[1] = abi.encodePacked(rB, sB, vB);
+            signatures[2] = abi.encodePacked(rA, sA, vA);
+
+            uint256 count =
+                localTreasury.countValidSigners(
+                    digest,
+                    signatures
+                );
+
+            assertEq(count, 2);
+        }
+
+        function test_SameSignerCannotSatisfyThresholdTwice() public {
+            address[] memory signerList = new address[](2);
+            signerList[0] = alice;
+            signerList[1] = bob;
+
+            SecureTreasury localTreasury =
+                new SecureTreasury(signerList, 2);
+
+            bytes32 digest = localTreasury.getTransactionDigest(
+                address(0x1234),
+                1 ether,
+                "",
+                0
+            );
+
+            (uint8 v, bytes32 r, bytes32 s) =
+                vm.sign(alicePrivateKey, digest);
+
+            bytes memory signature =
+                abi.encodePacked(r, s, v);
+
+            bytes[] memory signatures = new bytes[](2);
+
+            signatures[0] = signature;
+            signatures[1] = signature;
+
+            uint256 count =
+                localTreasury.countValidSigners(
+                    digest,
+                    signatures
+                );
+
+            assertEq(count, 1);
+        }
+
+        function test_NonSignerIsNotCounted() public {
+            uint256 malloryPrivateKey = 0xDAD;
+
+            address[] memory signerList = new address[](2);
+            signerList[0] = alice;
+            signerList[1] = bob;
+
+            SecureTreasury localTreasury =
+                new SecureTreasury(signerList, 2);
+
+            bytes32 digest = localTreasury.getTransactionDigest(
+                address(0x1234),
+                1 ether,
+                "",
+                0
+            );
+
+            (uint8 vA, bytes32 rA, bytes32 sA) =
+                vm.sign(alicePrivateKey, digest);
+
+            (uint8 vM, bytes32 rM, bytes32 sM) =
+                vm.sign(malloryPrivateKey, digest);
+
+            bytes[] memory signatures = new bytes[](2);
+
+            signatures[0] = abi.encodePacked(rA, sA, vA);
+            signatures[1] = abi.encodePacked(rM, sM, vM);
+
+            uint256 count =
+                localTreasury.countValidSigners(
+                    digest,
+                    signatures
+                );
+
+            assertEq(count, 1);
+        }
+
+        function test_CanExecuteWithValidSignatures() public {
+            address[] memory signerList = new address[](2);
+            signerList[0] = alice;
+            signerList[1] = bob;
+
+            SecureTreasury localTreasury =
+                new SecureTreasury(signerList, 2);
+
+            // Fund the local treasury so it can send ETH in the proposal
+            vm.deal(address(localTreasury), 1 ether);
+
+            uint256 proposalId =
+                localTreasury.createProposal(
+                    address(0x1234),
+                    1 ether,
+                    ""
+                );
+
+            SecureTreasury.Proposal memory proposal =
+                localTreasury.getProposal(proposalId);
+
+            bytes32 digest =
+                localTreasury.getTransactionDigest(
+                    proposal.to,
+                    proposal.value,
+                    proposal.data,
+                    proposal.nonce
+                );
+
+            (uint8 vA, bytes32 rA, bytes32 sA) =
+                vm.sign(alicePrivateKey, digest);
+
+            (uint8 vB, bytes32 rB, bytes32 sB) =
+                vm.sign(bobPrivateKey, digest);
+
+            bytes[] memory signatures = new bytes[](2);
+
+            signatures[0] =
+                abi.encodePacked(rA, sA, vA);
+
+            signatures[1] =
+                abi.encodePacked(rB, sB, vB);
+
+            // This will be implemented in the contract next.
+            localTreasury.execute(
+                proposalId,
+                signatures
+            );
+
+            SecureTreasury.Proposal memory executedProposal =
+                localTreasury.getProposal(proposalId);
+
+            assertTrue(executedProposal.executed);
+        }
+
+        function test_MalformedSignatureIsRejected() public {
+            uint256 proposalId =
+                treasury.createProposal(
+                    recipient,
+                    1 ether,
+                    ""
+                );
+
+            bytes[] memory signatures =
+                new bytes[](1);
+
+            signatures[0] = hex"1234";
+
+            vm.expectRevert();
+            treasury.execute(
+                proposalId,
+                signatures
+            );
+        }
+
+        function test_EmptySignatureIsRejected() public {
+            uint256 proposalId =
+                treasury.createProposal(
+                    recipient,
+                    1 ether,
+                    ""
+                );
+
+            bytes[] memory signatures =
+                new bytes[](1);
+
+            signatures[0] = "";
+
+            vm.expectRevert();
+            treasury.execute(
+                proposalId,
+                signatures
+            );
+        }
+
+        function test_SignatureOrderDoesNotMatter() public {
+            uint256 proposalId =
+                treasury.createProposal(
+                    recipient,
+                    1 ether,
+                    ""
+                );
+
+            SecureTreasury.Proposal memory proposal =
+                treasury.getProposal(proposalId);
+
+            bytes32 digest =
+                treasury.getTransactionDigest(
+                    proposal.to,
+                    proposal.value,
+                    proposal.data,
+                    proposal.nonce
+                );
+
+            (uint8 vA, bytes32 rA, bytes32 sA) =
+                vm.sign(alicePrivateKey, digest);
+
+            (uint8 vB, bytes32 rB, bytes32 sB) =
+                vm.sign(bobPrivateKey, digest);
+
+            bytes[] memory signatures =
+                new bytes[](2);
+
+            signatures[0] = abi.encodePacked(rB, sB, vB);
+            signatures[1] = abi.encodePacked(rA, sA, vA);
+
+            treasury.execute(
+                proposalId,
+                signatures
+            );
+
+            SecureTreasury.Proposal memory executedProposal =
+                treasury.getProposal(proposalId);
+
+            assertTrue(executedProposal.executed);
+        }
+
+        function test_ThreeSignaturesWithDuplicateSignerCannotBypassThreshold()
+        public
+        {
+            uint256 proposalId =
+                treasury.createProposal(
+                    recipient,
+                    1 ether,
+                    ""
+                );
+
+            SecureTreasury.Proposal memory proposal =
+                treasury.getProposal(proposalId);
+
+            bytes32 digest =
+                treasury.getTransactionDigest(
+                    proposal.to,
+                    proposal.value,
+                    proposal.data,
+                    proposal.nonce
+                );
+
+            (uint8 vA, bytes32 rA, bytes32 sA) =
+                vm.sign(alicePrivateKey, digest);
+
+            (uint8 vB, bytes32 rB, bytes32 sB) =
+                vm.sign(bobPrivateKey, digest);
+
+            bytes[] memory signatures =
+                new bytes[](3);
+
+            signatures[0] = abi.encodePacked(rA, sA, vA);
+            signatures[1] = abi.encodePacked(rB, sB, vB);
+            signatures[2] = abi.encodePacked(rA, sA, vA);
+
+            treasury.execute(
+                proposalId,
+                signatures
+            );
+
+            SecureTreasury.Proposal memory executedProposal =
+                treasury.getProposal(proposalId);
+
+            assertTrue(executedProposal.executed);
+        }
+
+        function testFuzz_DuplicateSignerNeverCountsTwice(
+            uint8 duplicateCount
+        ) public {
+            duplicateCount =
+                uint8(bound(duplicateCount, 1, 10));
+
+            uint256 proposalId =
+                treasury.createProposal(
+                    recipient,
+                    1 ether,
+                    ""
+                );
+
+            SecureTreasury.Proposal memory proposal =
+                treasury.getProposal(proposalId);
+
+            bytes32 digest =
+                treasury.getTransactionDigest(
+                    proposal.to,
+                    proposal.value,
+                    proposal.data,
+                    proposal.nonce
+                );
+
+            (uint8 vA, bytes32 rA, bytes32 sA) =
+                vm.sign(alicePrivateKey, digest);
+
+            bytes[] memory signatures =
+                new bytes[](duplicateCount);
+
+            for (uint256 i = 0; i < duplicateCount; i++) {
+                signatures[i] =
+                    abi.encodePacked(rA, sA, vA);
+            }
+
+            uint256 count =
+                treasury.countValidSigners(
+                    digest,
+                    signatures
+                );
+
+            assertEq(count, 1);
+        }
+
+        function testFuzz_NonSignersNeverIncreaseSignerCount(
+            uint8 nonSignerCount
+        ) public {
+            nonSignerCount =
+                uint8(bound(nonSignerCount, 1, 10));
+
+            uint256 proposalId =
+                treasury.createProposal(
+                    recipient,
+                    1 ether,
+                    ""
+                );
+
+            SecureTreasury.Proposal memory proposal =
+                treasury.getProposal(proposalId);
+
+            bytes32 digest =
+                treasury.getTransactionDigest(
+                    proposal.to,
+                    proposal.value,
+                    proposal.data,
+                    proposal.nonce
+                );
+
+            // Alice is a registered signer.
+            (uint8 vA, bytes32 rA, bytes32 sA) =
+                vm.sign(alicePrivateKey, digest);
+
+            // Mallory is NOT registered.
+            uint256 malloryPrivateKey = 0xBAD;
+
+            (uint8 vM, bytes32 rM, bytes32 sM) =
+                vm.sign(malloryPrivateKey, digest);
+
+            bytes[] memory signatures =
+                new bytes[](nonSignerCount + 1);
+
+            // First signature: valid registered signer.
+            signatures[0] =
+                abi.encodePacked(rA, sA, vA);
+
+            // Remaining signatures: same non-signer.
+            for (uint256 i = 1; i <= nonSignerCount; i++) {
+                signatures[i] =
+                    abi.encodePacked(rM, sM, vM);
+            }
+
+            uint256 count =
+                treasury.countValidSigners(
+                    digest,
+                    signatures
+                );
+
+            assertEq(count, 1);
+        }
+
+        function _getSignatures(
+                uint256 proposalId,
+                uint256 privateKeyA,
+                uint256 privateKeyB
+            ) internal returns (bytes[] memory signatures) {
+                SecureTreasury.Proposal memory proposal =
+                    treasury.getProposal(proposalId);
+
+                bytes32 digest =
+                    treasury.getTransactionDigest(
+                        proposal.to,
+                        proposal.value,
+                        proposal.data,
+                        proposal.nonce
+                    );
+
+                (uint8 vA, bytes32 rA, bytes32 sA) =
+                    vm.sign(privateKeyA, digest);
+
+                (uint8 vB, bytes32 rB, bytes32 sB) =
+                    vm.sign(privateKeyB, digest);
+
+                signatures = new bytes[](2);
+
+                signatures[0] = abi.encodePacked(rA, sA, vA);
+                signatures[1] = abi.encodePacked(rB, sB, vB);
+            }
+        
+        }
+
+        
 
     contract AlwaysRevert {
         receive() external payable {

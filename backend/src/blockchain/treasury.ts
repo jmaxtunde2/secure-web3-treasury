@@ -142,6 +142,18 @@ const treasuryAbi = [
       },
     ],
   },
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "proposalId",
+        type: "uint256",
+      },
+    ],
+    outputs: [],
+  },
 ] as const;
 
 export async function getTreasuryState() {
@@ -214,4 +226,38 @@ export async function createProposal(to:`0x${string}`, value: bigint, data: `0x$
     //console.log("Decoded events:", events);
     
     return {receipt, hash,proposalId};
+}
+
+export async function isTreasurySigner(
+  address: `0x${string}`,
+): Promise<boolean> {
+  const signers = await publicClient.readContract({
+    address: treasuryAddress,
+    abi: treasuryAbi,
+    functionName: "getSigner",
+  });
+
+  return signers.some(
+    (signer) => signer.toLowerCase() === address.toLowerCase(),
+  );
+}
+
+export async function approveProposal(
+  proposalId: bigint,
+) {
+  const hash = await walletClient.writeContract({
+    address: treasuryAddress,
+    abi: treasuryAbi,
+    functionName: "approve",
+    args: [proposalId],
+  });
+
+  const receipt = await publicClient.waitForTransactionReceipt({
+    hash,
+  });
+
+  return {
+    hash,
+    receipt,
+  };
 }

@@ -41,3 +41,32 @@ export function requireRole(
 ): boolean {
   return allowedRoles.includes(role);
 }
+
+export type Permission =
+   | "proposal:create"
+  | "proposal:read"
+  | "proposal:approve"
+  | "proposal:execute";
+
+const rolePermissions: Record<Role, Permission[]> = {
+  viewer: [
+    "proposal:read",
+  ],
+  operator: [
+    "proposal:read",
+    "proposal:create",
+  ],
+  admin: [
+    "proposal:read",
+    "proposal:create",
+    "proposal:approve",
+    "proposal:execute",
+  ],
+};
+
+export function hasPermission(
+  role: Role,
+  permission: Permission,
+): boolean {
+  return rolePermissions[role].includes(permission);
+}
