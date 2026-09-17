@@ -14,12 +14,18 @@ if(!chainId){
   throw new Error("CHAIN_ID is not defined in the environment variables.");
 }
 
-const privateKey = process.env.DEPLOYER_PRIVATE_KEY as `0x${string}`;
+const privateKey = process.env.TREASURY_SIGNER_PRIVATE_KEY as `0x${string}`;
 if(!privateKey){
-  throw new Error("DEPLOYER_PRIVATE_KEY is not defined in the environment variables.");
+  throw new Error("TREASURY_SIGNER_PRIVATE_KEY is not defined in the environment variables.");
+}
+
+const privateKey2 = process.env.TREASURY_SIGNER_2_PRIVATE_KEY as `0x${string}`;
+if(!privateKey2){
+  throw new Error("TREASURY_SIGNER_2_PRIVATE_KEY is not defined in the environment variables.");
 }
 
 const account = privateKeyToAccount(privateKey as `0x${string}`);
+const account2 = privateKeyToAccount(privateKey2 as `0x${string}`);
 
 const anvil = defineChain({
   id: chainId,
@@ -47,3 +53,16 @@ export const walletClient = createWalletClient({
   account: account,
   
 });
+
+export const walletClient2 = createWalletClient({
+  chain: anvil,
+  transport: http(),
+  account: account2,
+  
+});
+
+
+console.log("Backend signer #1:", account.address);
+console.log("Backend signer #2:", account2.address);
+
+

@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import { getTreasuryState,getProposal,createProposal } from "./blockchain/treasury.js";
+import { getTreasuryState,getProposal,createProposal, approveProposal, signProposal,verifyProposalSignature, executeProposal} from "./blockchain/treasury.js";
 import { console } from "inspector/promises";
 import { authenticateApiKey, requireRole, hasPermission } from "./auth.js";
 import type {
@@ -7,7 +7,6 @@ import type {
   FastifyError,
   FastifyRequest,
 } from "fastify";
-
 
 const app = Fastify({logger: true});
 
@@ -217,7 +216,7 @@ app.post(
       // Confirm that the proposal exists before sending a transaction.
       await getProposal(proposalId);
 
-      const result = await approveProposal(proposalId);
+      const result = await approveProposal(proposalId,2);
 
       return {
         proposalId: id,
@@ -232,6 +231,140 @@ app.post(
     }
   },
 );
+
+app.post(
+  "/proposals/:id/sign",
+  async (request, reply) => {
+    const apiKey = request.headers["x-api-key"];
+    const normalizedApiKey = Array.isArray(apiKey) ? apiKey[0] : apiKey;
+    const user = authenticateApiKey(normalizedApiKey);
+
+    if (!user) {
+      return reply.code(401).send({
+        error: "Unauthorized",
+      });
+    }
+
+    if (!requireRole(user.role, ["admin"])) {
+      return reply.code(403).send({
+        error: "Forbidden",
+      });
+    }
+
+    const { id } = request.params as { id: string };
+    const proposalId = BigInt(id);
+
+    try {
+      const { signer } = request.body as {
+        signer: 1 | 2;
+      };
+
+      const signature = await signProposal(
+        proposalId,
+        signer,
+      );
+
+      return {
+        proposalId: id,
+        signature,
+      };
+    } catch (error) {
+      request.log.error(error);
+
+      return reply.code(500).send({
+        error: "Failed to sign proposal",
+      });
+    }
+  },
+);
+
+app.post(
+  "/proposals/:id/verify-signature",
+  async (request, reply) => {
+    const apiKey = request.headers["x-api-key"];
+    const normalizedApiKey = Array.isArray(apiKey) ? apiKey[0] : apiKey;
+
+    const user = authenticateApiKey(normalizedApiKey);
+
+    if (!user) {
+      return reply.code(401).send({
+        error: "Unauthorized",
+      });
+    }
+
+    if (!requireRole(user.role, ["admin"])) {
+      return reply.code(403).send({
+        error: "Forbidden",
+      });
+    }
+
+    const { id } = request.params as { id: string };
+    const { signature } = request.body as {
+      signature: `0x${string}`;
+    };
+
+    const proposalId = BigInt(id);
+
+    try {
+      const verification = await verifyProposalSignature(
+        proposalId,
+        signature,
+      );
+
+      return {
+        proposalId: id,
+        digest: verification.digest,
+        recoveredSigner: verification.recoveredSigner,
+        validSigner: verification.validSigner,
+      };
+    } catch (error) {
+      request.log.error(error);
+
+      return reply.code(500).send({
+        error: "Failed to verify signature",
+      });
+    }
+  },
+);
+
+app.post("/proposals/:id/execute", async (request, reply) => {
+  const apiKey = request.headers["x-api-key"];
+  const normalizedApiKey = Array.isArray(apiKey) ? apiKey[0] : apiKey;
+
+  const user = authenticateApiKey(normalizedApiKey);
+
+  if (!user) {
+    return reply.code(401).send({ error: "Unauthorized" });
+  }
+
+  if (!hasPermission(user.role, "proposal:execute")) {
+    return reply.code(403).send({ error: "Forbidden" });
+  }
+
+  const { id } = request.params as { id: string };
+  const { signatures } = request.body as {
+    signatures: `0x${string}`[];
+  };
+
+  const proposalId = BigInt(id);
+
+  try {
+    const result = await executeProposal(
+      proposalId,
+      signatures,
+    );
+
+    return {
+      proposalId: id,
+      transactionHash: result.hash,
+    };
+  } catch (error) {
+    request.log.error(error);
+    return reply.code(500).send({
+      error: "Failed to execute proposal",
+    });
+  }
+});
 
 
 const start = async () =>{

@@ -1,4 +1,4 @@
-import { publicClient,walletClient } from "./client.js";
+import { publicClient,walletClient, walletClient2 } from "./client.js";
 import "dotenv/config";
 import { parseEventLogs } from "viem";
 
@@ -154,6 +154,80 @@ const treasuryAbi = [
     ],
     outputs: [],
   },
+  {
+    type: "function",
+    name: "getTransactionDigest",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "to",
+        type: "address",
+      },
+      {
+        name: "value",
+        type: "uint256",
+      },
+      {
+        name: "data",
+        type: "bytes",
+      },
+      {
+        name: "nonce",
+        type: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "bytes32",
+      },
+    ],
+  },
+  {
+    type: "function",
+    name: "recoverSigner",
+    stateMutability: "pure",
+    inputs: [
+      { name: "digest", type: "bytes32" },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [
+      { name: "", type: "address" },
+    ],
+  },
+  {
+    type: "function",
+    name: "isValidSignature",
+    stateMutability: "view",
+    inputs: [
+      { name: "digest", type: "bytes32" },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [
+      { name: "", type: "bool" },
+    ],
+  },
+  {
+    type: "function",
+    name: "execute",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "proposalId",
+        type: "uint256",
+      },
+      {
+        name: "signatures",
+        type: "bytes[]",
+      },
+    ],
+    outputs: [],
+  },
+  {
+    type: "error",
+    name: "AlreadyExecuted",
+    inputs: [],
+  },
 ] as const;
 
 export async function getTreasuryState() {
@@ -244,12 +318,132 @@ export async function isTreasurySigner(
 
 export async function approveProposal(
   proposalId: bigint,
+  signer: 1 | 2 = 1,
 ) {
-  const hash = await walletClient.writeContract({
+  const client = signer === 1
+    ? walletClient
+    : walletClient2;
+
+  const hash = await client.writeContract({
     address: treasuryAddress,
     abi: treasuryAbi,
     functionName: "approve",
     args: [proposalId],
+  });
+
+  const receipt = await publicClient.waitForTransactionReceipt({
+    hash,
+  });
+
+  return {
+    hash,
+    receipt,
+  };
+}
+
+export async function getProposalDigest(proposalId: bigint) {
+  const proposal = await getProposal(proposalId);
+
+  const digest = await publicClient.readContract({
+    address: treasuryAddress,
+    abi: treasuryAbi,
+    functionName: "getTransactionDigest",
+    args: [
+      proposal.to,
+      proposal.value,
+      proposal.data,
+      proposal.nonce,
+    ],
+  });
+
+  return digest;
+}
+
+export async function signProposal(
+  proposalId: bigint,
+  signer: 1 | 2 = 1,
+) {
+  const proposal = await getProposal(proposalId);
+
+  const client = signer === 1
+    ? walletClient
+    : walletClient2;
+
+  const signature = await client.signTypedData({
+    domain: {
+      name: "SecureTreasury",
+      version: "1",
+      chainId: Number(process.env.CHAIN_ID),
+      verifyingContract: treasuryAddress,
+    },
+    types: {
+      Transaction: [
+        { name: "to", type: "address" },
+        { name: "value", type: "uint256" },
+        { name: "data", type: "bytes" },
+        { name: "nonce", type: "uint256" },
+      ],
+    },
+    primaryType: "Transaction",
+    message: {
+      to: proposal.to,
+      value: proposal.value,
+      data: proposal.data,
+      nonce: proposal.nonce,
+    },
+  });
+
+  return signature;
+}
+
+export async function verifyProposalSignature(
+  proposalId: bigint,
+  signature: `0x${string}`,
+) {
+  const proposal = await getProposal(proposalId);
+
+  const digest = await publicClient.readContract({
+    address: treasuryAddress,
+    abi: treasuryAbi,
+    functionName: "getTransactionDigest",
+    args: [
+      proposal.to,
+      proposal.value,
+      proposal.data,
+      proposal.nonce,
+    ],
+  });
+
+  const recoveredSigner = await publicClient.readContract({
+    address: treasuryAddress,
+    abi: treasuryAbi,
+    functionName: "recoverSigner",
+    args: [digest, signature],
+  });
+
+  const validSigner = await publicClient.readContract({
+    address: treasuryAddress,
+    abi: treasuryAbi,
+    functionName: "isValidSignature",
+    args: [digest, signature],
+  });
+
+  return {
+    digest,
+    recoveredSigner,
+    validSigner,
+  };
+}
+
+export async function executeProposal(
+  proposalId: bigint,
+  signatures: `0x${string}`[],
+) {
+  const hash = await walletClient.writeContract({
+    address: treasuryAddress,
+    abi: treasuryAbi,
+    functionName: "execute",
+    args: [proposalId, signatures],
   });
 
   const receipt = await publicClient.waitForTransactionReceipt({
