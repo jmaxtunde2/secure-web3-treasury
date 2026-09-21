@@ -5,17 +5,36 @@ import {
   useReadContracts,
 } from "wagmi";
 
+import type {
+  ContractFunctionParameters,
+} from "viem";
+
 import {
   treasuryAbi,
   treasuryAddress,
 } from "../../config/treasury";
+
+type GetProposalContract = ContractFunctionParameters<
+  typeof treasuryAbi,
+  "view",
+  "getProposal"
+>;
+
+// type Proposal = {
+//   to: `0x${string}`;
+//   value: bigint;
+//   approvalCount: bigint;
+//   data: `0x${string}`;
+//   nonce: bigint;
+//   executed: boolean;
+// };
 
 export function ProposalList() {
   const proposalCount = useReadContract({
     address: treasuryAddress,
     abi: treasuryAbi,
     functionName: "proposalCount",
-    chainId: 31337,
+    chainId: 11155111,
   });
 
   const count = proposalCount.data
@@ -27,16 +46,20 @@ export function ProposalList() {
     (_, index) => BigInt(index),
   );
 
-  const proposals = useReadContracts({
-    contracts: proposalIds.map((proposalId) => ({
+  const proposalContracts: GetProposalContract[] =
+    proposalIds.map((proposalId) => ({
       address: treasuryAddress,
       abi: treasuryAbi,
       functionName: "getProposal",
       args: [proposalId],
-      chainId: 31337,
-    })),
+    }));
+
+  const proposals = useReadContracts({
+    contracts: proposalContracts,
     query: {
-      enabled: proposalCount.status === "success" && count > 0,
+      enabled:
+        proposalCount.status === "success" &&
+        count > 0,
     },
   });
 
@@ -60,52 +83,116 @@ export function ProposalList() {
     return <p>Failed to load proposals.</p>;
   }
 
-  return (
-    <section>
-      <h2>Proposals</h2>
+   return (
+    <section className="proposal-section">
+      <div className="section-heading">
+        <div>
+          <p className="section-eyebrow">Transaction Queue</p>
+          <h2>Proposals</h2>
+        </div>
 
-      <p>Total proposals: {count}</p>
+        <span className="proposal-count">
+          {count} {count === 1 ? "proposal" : "proposals"}
+        </span>
+      </div>
 
-      {proposals.data?.map((result, index) => {
-        if (result.status !== "success") {
+      <div className="proposal-list">
+        {proposals.data?.map((result, index) => {
+          if (result.status !== "success") {
+            return (
+              <article
+                className="proposal-card"
+                key={index}
+              >
+                <div className="proposal-header">
+                  <h3>Proposal #{index}</h3>
+
+                  <span className="proposal-status proposal-status-error">
+                    Error
+                  </span>
+                </div>
+
+                <p className="proposal-error">
+                  Failed to load proposal.
+                </p>
+              </article>
+            );
+          }
+          const proposal = result.result;
+          
           return (
-            <article key={index}>
-              <h3>Proposal #{index}</h3>
-              <p>Failed to load proposal.</p>
+            <article
+              className={`proposal-card ${
+                proposal.executed
+                  ? "proposal-card-executed"
+                  : ""
+              }`}
+              key={index}
+            >
+              <div className="proposal-header">
+                <div>
+                  <p className="proposal-label">
+                    Proposal
+                  </p>
+                  <h3>#{index}</h3>
+                </div>
+
+                <span
+                  className={`proposal-status ${
+                    proposal.executed
+                      ? "proposal-status-executed"
+                      : "proposal-status-pending"
+                  }`}
+                >
+                  {proposal.executed
+                    ? "Executed"
+                    : "Pending"}
+                </span>
+              </div>
+
+              <div className="proposal-details">
+                <div className="proposal-detail">
+                  <span>Target</span>
+                  <strong className="mono-value">
+                    {proposal.to}
+                  </strong>
+                </div>
+
+                <div className="proposal-detail">
+                  <span>Value</span>
+                  <strong>
+                    {Number(proposal.value) / 1e18} ETH
+                  </strong>
+                </div>
+
+                <div className="proposal-detail">
+                  <span>Approvals</span>
+                  <strong>
+                    {proposal.approvalCount.toString()}
+                  </strong>
+                </div>
+
+                <div className="proposal-detail">
+                  <span>Nonce</span>
+                  <strong>
+                    {proposal.nonce.toString()}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="proposal-data">
+                <span>Calldata</span>
+
+                <code>
+                  {proposal.data === "0x"
+                    ? "No calldata"
+                    : proposal.data}
+                </code>
+              </div>
             </article>
           );
-        }
-
-        const proposal = result.result;
-
-        return (
-          <article key={index}>
-            <h3>Proposal #{index}</h3>
-
-            <p>Target: {proposal.to}</p>
-
-            <p>
-              Value: {proposal.value.toString()} wei
-            </p>
-
-            <p>
-              Approval Count:{" "}
-              {proposal.approvalCount.toString()}
-            </p>
-
-            <p>Data: {proposal.data}</p>
-
-            <p>
-              Nonce: {proposal.nonce.toString()}
-            </p>
-
-            <p>
-              Executed:{" "}
-              {proposal.executed ? "Yes" : "No"}
-            </p>
-          </article>
-        );
-      })}
+        })}
+      </div>
     </section>
   );
 }

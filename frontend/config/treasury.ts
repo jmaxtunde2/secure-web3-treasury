@@ -1,5 +1,9 @@
+// export const treasuryAddress =
+//   "0x5fbdb2315678afecb367f032d93f642f64180aa3" as const;
+
+// Sepolia contrac
 export const treasuryAddress =
-  "0x5fbdb2315678afecb367f032d93f642f64180aa3" as const;
+  "0x8621D2F90346d40862aF0ba265b383D3C95Fc908" as const;
 
 export const treasuryAbi = [
   {

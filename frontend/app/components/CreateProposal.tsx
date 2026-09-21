@@ -2,6 +2,10 @@
 
 import { useState } from "react";
 import {
+  isAddress,
+  isHex,
+} from "viem";
+import {
   useAccount,
   useWaitForTransactionReceipt,
   useWriteContract,
@@ -18,6 +22,8 @@ export function CreateProposal() {
   const [target, setTarget] = useState("");
   const [value, setValue] = useState("0");
   const [data, setData] = useState("0x");
+  const [validationError, setValidationError] =
+    useState("");
 
   const {
     writeContract,
@@ -26,15 +32,41 @@ export function CreateProposal() {
     error,
   } = useWriteContract();
 
-  const { isLoading: isConfirming, isSuccess: isConfirmed } =
-    useWaitForTransactionReceipt({
-      hash,
-    });
+  const {
+    isLoading: isConfirming,
+    isSuccess: isConfirmed,
+  } = useWaitForTransactionReceipt({
+    hash,
+  });
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  function handleSubmit(
+    event: React.FormEvent<HTMLFormElement>,
+  ) {
     event.preventDefault();
+    setValidationError("");
 
     if (!isConnected || !address) {
+      return;
+    }
+
+    if (!isAddress(target)) {
+      setValidationError(
+        "Enter a valid Ethereum address.",
+      );
+      return;
+    }
+
+    if (!/^\d+$/.test(value)) {
+      setValidationError(
+        "Value must be a valid whole number in wei.",
+      );
+      return;
+    }
+
+    if (!isHex(data)) {
+      setValidationError(
+        "Calldata must be valid hexadecimal starting with 0x.",
+      );
       return;
     }
 
@@ -42,7 +74,7 @@ export function CreateProposal() {
       address: treasuryAddress,
       abi: treasuryAbi,
       functionName: "createProposal",
-      chainId: 31337,
+      chainId: 11155111,
       args: [
         target as `0x${string}`,
         BigInt(value),
@@ -51,50 +83,99 @@ export function CreateProposal() {
     });
   }
 
+  const isBusy = isPending || isConfirming;
+
   return (
-    <section>
-      <h2>Create Proposal</h2>
+    <section className="create-proposal">
+      <div className="section-heading">
+        <div>
+          <p className="section-eyebrow">
+            Treasury Action
+          </p>
+          <h2>Create Proposal</h2>
+        </div>
+      </div>
+
+      <p className="form-description">
+        Create a transaction proposal for Treasury signers
+        to authorize and execute.
+      </p>
 
       <form onSubmit={handleSubmit}>
-        <div>
-          <label htmlFor="target">Target address</label>
+        <div className="form-field">
+          <label htmlFor="target">
+            Target address
+          </label>
+
           <input
             id="target"
             type="text"
             value={target}
-            onChange={(event) => setTarget(event.target.value)}
+            onChange={(event) =>
+              setTarget(event.target.value)
+            }
             placeholder="0x..."
+            autoComplete="off"
             required
           />
+
+          <small>
+            Contract or wallet that will receive the call.
+          </small>
         </div>
 
-        <div>
-          <label htmlFor="value">Value (wei)</label>
+        <div className="form-field">
+          <label htmlFor="value">
+            Value <span>wei</span>
+          </label>
+
           <input
             id="value"
             type="number"
             min="0"
+            step="1"
             value={value}
-            onChange={(event) => setValue(event.target.value)}
+            onChange={(event) =>
+              setValue(event.target.value)
+            }
             required
           />
+
+          <small>
+            Native ETH amount sent with the transaction.
+          </small>
         </div>
 
-        <div>
+        <div className="form-field">
           <label htmlFor="data">Calldata</label>
-          <input
+
+          <textarea
             id="data"
-            type="text"
             value={data}
-            onChange={(event) => setData(event.target.value)}
+            onChange={(event) =>
+              setData(event.target.value)
+            }
             placeholder="0x"
+            rows={3}
             required
           />
+
+          <small>
+            ABI-encoded function call. Use <code>0x</code>{" "}
+            for a plain ETH transfer.
+          </small>
         </div>
+
+        {validationError && (
+          <div className="form-message form-message-error">
+            {validationError}
+          </div>
+        )}
 
         <button
+          className="primary-action"
           type="submit"
-          disabled={!isConnected || isPending || isConfirming}
+          disabled={!isConnected || isBusy}
         >
           {isPending
             ? "Confirm in wallet..."
@@ -105,19 +186,31 @@ export function CreateProposal() {
       </form>
 
       {!isConnected && (
-        <p>Connect a wallet to create a proposal.</p>
+        <div className="form-message form-message-muted">
+          Connect a wallet to create a proposal.
+        </div>
       )}
 
       {hash && (
-        <p>Transaction: {hash}</p>
+        <div className="transaction-result">
+          <span>Transaction submitted</span>
+          <code>
+            {hash.slice(0, 10)}...{hash.slice(-8)}
+          </code>
+        </div>
       )}
 
       {isConfirmed && (
-        <p>Proposal transaction confirmed.</p>
+        <div className="form-message form-message-success">
+          Proposal transaction confirmed successfully.
+        </div>
       )}
 
       {error && (
-        <p>Transaction failed: {error.message}</p>
+        <div className="form-message form-message-error">
+          Transaction failed.
+          <small>{error.message}</small>
+        </div>
       )}
     </section>
   );
